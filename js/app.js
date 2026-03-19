@@ -21,6 +21,21 @@ const POST_HISTORY_KEY = 'skydeck_post_history_v1';
 const ADMIN_REPORT_HANDLE = 'rino-program.bsky.social';
 
 // =============================================
+//  console.error のポップアップ表示
+// =============================================
+(function () {
+  const _origError = console.error.bind(console);
+  console.error = function (...args) {
+    _origError(...args);
+    const msg = args
+      .map(a => (a instanceof Error ? a.message : String(a ?? '')))
+      .join(' ')
+      .trim();
+    if (msg && typeof showToast === 'function') showToast(msg, 'error', 5000);
+  };
+})();
+
+// =============================================
 //  初期化
 // =============================================
 async function init() {
