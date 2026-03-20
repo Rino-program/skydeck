@@ -1408,6 +1408,21 @@ async function runProbe(label, url) {
   } catch (e) {
     const elapsed = Math.round(performance.now() - start);
     clearTimeout(timer);
+    // Safariでの「Load failed」はCORS/ポリシー失敗のことが多い。
+    try {
+      const c2 = new AbortController();
+      const t2 = setTimeout(() => c2.abort(), 5000);
+      await fetch(url, { method: 'GET', mode: 'no-cors', cache: 'no-store', signal: c2.signal });
+      clearTimeout(t2);
+      return {
+        label,
+        ok: false,
+        status: 'OPAQUE',
+        statusText: '',
+        elapsed,
+        note: '到達は可能だが CORS/ブラウザポリシーで詳細取得不可',
+      };
+    } catch {}
     const detail = e?.name === 'AbortError'
       ? 'timeout'
       : (e?.message || 'network/cors error');
@@ -1438,6 +1453,8 @@ async function handleLoginConnectivityCheck() {
   try {
     const now = new Date();
     const lines = [`接続診断: ${now.toLocaleString('ja-JP')}`];
+    const ua = navigator.userAgent || 'unknown';
+    lines.push(`- Browser: ${ua}`);
 
     // Safariのプライベートモード等で起きるストレージ制限の診断
     try {
@@ -1475,9 +1492,11 @@ async function handleLoginConnectivityCheck() {
     }
 
     const allOk = probes.every(p => p.ok);
-    const someOk = probes.some(p => p.ok);
+    const someOk = probes.some(p => p.ok || p.status === 'OPAQUE');
+    const hasOpaque = probes.some(p => p.status === 'OPAQUE');
     const level = allOk ? 'ok' : someOk ? 'warn' : 'err';
     if (level === 'ok') lines.push('判定: 主要サーバーへ正常に接続できています。');
+    else if (level === 'warn' && hasOpaque) lines.push('判定: サーバー到達は可能ですが、SafariのCORS/追跡防止設定で遮断されている可能性があります。');
     else if (level === 'warn') lines.push('判定: 一部接続に問題があります。GitHub Pages配信時はCORS/ネットワーク制約の可能性があります。');
     else lines.push('判定: サーバーへ接続できません。回線・DNS・CSP設定を確認してください。');
 
