@@ -1389,7 +1389,8 @@ async function handleLogin() {
   } finally { setLoading(btn, false); }
 }
 
-async function runProbe(label, url) {
+async function runProbe(label, url, opts = {}) {
+  const acceptStatuses = Array.isArray(opts.acceptStatuses) ? opts.acceptStatuses : [];
   const start = performance.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -1397,13 +1398,17 @@ async function runProbe(label, url) {
     const res = await fetch(url, { method: 'GET', cache: 'no-store', signal: ctrl.signal });
     const elapsed = Math.round(performance.now() - start);
     clearTimeout(timer);
+    const effectiveOk = res.ok || acceptStatuses.includes(res.status);
     return {
       label,
       ok: res.ok,
+      effectiveOk,
       status: res.status,
       statusText: res.statusText || '',
       elapsed,
-      note: res.ok ? 'OK' : '応答あり（エラー系ステータス）',
+      note: res.ok
+        ? 'OK'
+        : (effectiveOk ? `到達OK（許容ステータス: ${res.status}）` : '応答あり（エラー系ステータス）'),
     };
   } catch (e) {
     const elapsed = Math.round(performance.now() - start);
@@ -1417,6 +1422,7 @@ async function runProbe(label, url) {
       return {
         label,
         ok: false,
+        effectiveOk: false,
         status: 'OPAQUE',
         statusText: '',
         elapsed,
@@ -1429,6 +1435,7 @@ async function runProbe(label, url) {
     return {
       label,
       ok: false,
+      effectiveOk: false,
       status: 'ERR',
       statusText: '',
       elapsed,
@@ -1468,12 +1475,16 @@ async function handleLoginConnectivityCheck() {
 
     const probes = await Promise.all([
       runProbe('Public API', 'https://bsky.social/xrpc/com.atproto.server.describeServer'),
-      runProbe('Chat API', 'https://api.bsky.chat/xrpc/chat.bsky.convo.listConvos?limit=1'),
+      runProbe('Chat API', 'https://api.bsky.chat/xrpc/chat.bsky.convo.listConvos?limit=1', { acceptStatuses: [401, 403] }),
     ]);
 
     probes.forEach(p => {
       lines.push(`- ${p.label}: ${p.status} ${p.statusText} (${p.elapsed}ms) / ${p.note}`.trim());
     });
+    const chatProbe = probes.find(p => p.label === 'Chat API');
+    if (chatProbe && (chatProbe.status === 401 || chatProbe.status === 403)) {
+      lines.push('- Chat API補足: 未ログイン/DM権限なしでは401/403が返るため、到達確認としては正常です。');
+    }
 
     const rawHandle = String(handleInput?.value || '').replace(/^@/, '').trim();
     if (rawHandle) {
@@ -1491,8 +1502,8 @@ async function handleLoginConnectivityCheck() {
       lines.push('- Handle Resolve: スキップ（ハンドル未入力）');
     }
 
-    const allOk = probes.every(p => p.ok);
-    const someOk = probes.some(p => p.ok || p.status === 'OPAQUE');
+    const allOk = probes.every(p => p.effectiveOk === true);
+    const someOk = probes.some(p => p.effectiveOk === true || p.status === 'OPAQUE');
     const hasOpaque = probes.some(p => p.status === 'OPAQUE');
     const level = allOk ? 'ok' : someOk ? 'warn' : 'err';
     if (level === 'ok') lines.push('判定: 主要サーバーへ正常に接続できています。');
