@@ -58,6 +58,8 @@ const DM_READ_STATE_KEY = C.DM_READ_STATE_KEY || 'skywebpro_dm_read_state_v1';
 const LOG_LEVEL_KEY = C.LOG_LEVEL_KEY || 'skywebpro_log_level_v1';
 const ADMIN_REPORT_HANDLE = C.ADMIN_REPORT_HANDLE || 'rino-program.bsky.social';
 const LOGIN_CONSOLE_MAX_LINES = Number(C.LOGIN_CONSOLE_MAX_LINES || 200);
+const POST_TEXT_MAX_CHARS = 300;
+const POST_WARN_THRESHOLD = 30;
 const DEFAULT_SHORTCUT_PREFS = C.DEFAULT_SHORTCUT_PREFS || {
   showHelp: '?',
   focusSearch: '/',
@@ -818,7 +820,6 @@ function applyImportedSettings() {
     resetInactivityTimer();
   }
   renderSearchHistory();
-  renderComposeTemplates();
   renderQuickNoteList();
 }
 
@@ -1182,7 +1183,6 @@ async function init() {
     }
   }
   renderSearchHistory();
-  renderComposeTemplates();
   renderComposeHashtagSuggestions();
   syncPinnedUi();
   syncSubTabsAria();
@@ -1262,7 +1262,6 @@ function handleExperienceSettingsChange() {
   };
   saveExperiencePrefs(next);
   renderSearchHistory();
-  renderComposeTemplates();
   if (S.tab === 'search' && S.searchTab === 'trends') execSearch('');
 }
 
@@ -1306,7 +1305,6 @@ function getAdaptiveBootTab() {
     ['profile', st.profile],
   ];
   const total = entries.reduce((sum, [, v]) => sum + v, 0);
-  if (total < 10) return getBootTab();
   entries.sort((a, b) => b[1] - a[1]);
   return entries[0][0] || getBootTab();
 }
@@ -1442,37 +1440,6 @@ function getSmartSearchSuggestions() {
   return [...timeSet, ...jpSet].slice(0, 5);
 }
 
-function getComposeSmartTemplates() {
-  const h = new Date().getHours();
-  const exp = getExperiencePrefs();
-  const mood = h < 10
-    ? ['おはようございます。今日の目標は...', '朝の気になるニュース:', '通勤中メモ:']
-    : h < 18
-      ? ['作業ログ: ', '今の進捗: ', '学んだことメモ: ']
-      : ['今日の振り返り: ', 'おつかれさまでした。', '明日やること: '];
-  const jp = exp.japanMode ? ['日本の話題で気になったこと:', '#BlueskyJP'] : [];
-  return [...mood, ...jp].slice(0, 6);
-}
-
-function renderComposeTemplates() {
-  const host = document.getElementById('compose-template-list');
-  if (!host) return;
-  const list = getComposeSmartTemplates();
-  host.innerHTML = list.map(v => `<button class="compose-chip" data-compose-template="${escapeHtml(v)}">${escapeHtml(v)}</button>`).join('');
-}
-
-function applyComposeTemplate(text) {
-  const ta = document.getElementById('compose-text');
-  if (!ta) return;
-  const val = String(text || '').trim();
-  if (!val) return;
-  ta.value = ta.value ? `${ta.value}\n${val}`.slice(0, 320) : val.slice(0, 320);
-  updateCharCount();
-  renderComposeHashtagSuggestions();
-  cacheComposeState();
-  ta.focus();
-}
-
 function buildComposeHashtagSuggestions(text) {
   const t = String(text || '').toLowerCase();
   const map = [
@@ -1602,7 +1569,7 @@ function restoreComposeCache() {
   try {
     const raw = JSON.parse(safeStorageGet(COMPOSE_CACHE_KEY) || 'null');
     if (!raw || typeof raw !== 'object') return;
-    const txt = String(raw.text || '').slice(0, 320);
+    const txt = String(raw.text || '');
     if (txt) {
       ta.value = txt;
       showToast('前回の入力を復元しました', 'info', 2400);
@@ -1811,7 +1778,7 @@ function insertIntoCompose(textToInsert) {
   const add = String(textToInsert || '').trim();
   if (!add) return;
   const next = ta.value ? `${ta.value}\n${add}` : add;
-  ta.value = next.slice(0, 320);
+  ta.value = next;
   updateCharCount();
   cacheComposeState();
   switchTab('home');
@@ -2286,7 +2253,20 @@ function groupNotificationsByReasonAndSubject(list) {
   });
 
   grouped.sort((a, b) => new Date(b.indexedAt || 0).getTime() - new Date(a.indexedAt || 0).getTime());
-  return grouped;
+  // If multiple grouped cards point to the same post, keep only the newest one.
+  const subjectSeen = new Set();
+  const deduped = [];
+  grouped.forEach(n => {
+    const subjectUri = String(getNotifSubjectUri(n) || '').trim();
+    if (!subjectUri) {
+      deduped.push(n);
+      return;
+    }
+    if (subjectSeen.has(subjectUri)) return;
+    subjectSeen.add(subjectUri);
+    deduped.push(n);
+  });
+  return deduped;
 }
 
 // =============================================
@@ -2756,10 +2736,12 @@ async function execSearch(q) {
 // =============================================
 function updateCharCount() {
   const t = document.getElementById('compose-text').value;
-  const r = 320 - [...t].length;
+  const r = POST_TEXT_MAX_CHARS - [...t].length;
   const el = document.getElementById('char-count');
+  const btn = document.getElementById('post-btn');
   el.textContent = r;
-  el.className = 'char-count' + (r <= 20 ? ' warn' : '') + (r < 0 ? ' danger' : '');
+  el.className = 'char-count' + (r <= POST_WARN_THRESHOLD ? ' warn' : '') + (r < 0 ? ' danger' : '');
+  if (btn) btn.disabled = r < 0;
 }
 
 function getReplyTemplate() {
@@ -2796,6 +2778,27 @@ function handleImageSelect(e) {
   renderPreviews();
   refreshRightStats();
   e.target.value = '';
+}
+
+function handleComposeImagePaste(e) {
+  const clipboard = e.clipboardData;
+  const items = Array.from(clipboard?.items || []);
+  const images = items
+    .filter(item => item && item.kind === 'file' && String(item.type || '').startsWith('image/'))
+    .map(item => item.getAsFile())
+    .filter(Boolean);
+  if (!images.length) return;
+
+  e.preventDefault();
+  const rem = 4 - S.pendingImgs.length;
+  const sizeOk = images.filter(f => f.size <= APP_MAX_IMAGE_BYTES);
+  const rejected = images.length - sizeOk.length;
+  S.pendingImgs.push(...sizeOk.slice(0, rem));
+
+  if (rejected > 0) showToast(`1MBを超える画像を ${rejected} 枚除外しました`, 'info');
+  if (sizeOk.length > rem) showToast(`画像は最大4枚です。${Math.max(0, rem)}枚追加しました。`, 'info');
+  renderPreviews();
+  refreshRightStats();
 }
 
 function handleQuickImageSelect(e) {
@@ -2929,7 +2932,7 @@ async function handlePost() {
   const btn  = document.getElementById('post-btn');
   const restriction = document.getElementById('reply-restriction').value;
   if (!text && !S.pendingImgs.length) { showToast('テキストまたは画像を入力してください', 'error'); return; }
-  if ([...text].length > 320) { showToast('320文字以内にしてください', 'error'); return; }
+  if ([...text].length > POST_TEXT_MAX_CHARS) { showToast(`${POST_TEXT_MAX_CHARS}文字以内にしてください`, 'error'); return; }
   setLoading(btn, true);
   try {
     await withAuth(() => apiPost(text, S.pendingImgs, S.replyTarget, restriction));
@@ -2962,11 +2965,13 @@ async function handlePost() {
 
 function updateQuickPostCount() {
   const t = document.getElementById('quick-post-text')?.value || '';
-  const r = 320 - [...t].length;
+  const r = POST_TEXT_MAX_CHARS - [...t].length;
   const el = document.getElementById('quick-post-count');
+  const btn = document.getElementById('quick-post-submit');
   if (!el) return;
   el.textContent = r;
-  el.className = 'char-count' + (r <= 20 ? ' warn' : '') + (r < 0 ? ' danger' : '');
+  el.className = 'char-count' + (r <= POST_WARN_THRESHOLD ? ' warn' : '') + (r < 0 ? ' danger' : '');
+  if (btn) btn.disabled = r < 0;
 }
 
 function openQuickPostModal() {
@@ -2995,7 +3000,7 @@ async function handleQuickPost() {
   const text = ta?.value.trim() || '';
   const restriction = document.getElementById('quick-post-restriction')?.value || 'everybody';
   if (!text && !S.quickPendingImgs.length) { showToast('テキストまたは画像を入力してください', 'error'); return; }
-  if ([...text].length > 320) { showToast('320文字以内にしてください', 'error'); return; }
+  if ([...text].length > POST_TEXT_MAX_CHARS) { showToast(`${POST_TEXT_MAX_CHARS}文字以内にしてください`, 'error'); return; }
   setLoading(btn, true);
   try {
     await withAuth(() => apiPost(text, S.quickPendingImgs, null, restriction));
@@ -3122,7 +3127,7 @@ function insertQuickNoteToCompose() {
   const note = (inp.value || '').trim();
   if (!note) { showToast('メモが空です', 'info'); return; }
   const next = ta.value ? `${ta.value}\n${note}` : note;
-  ta.value = next.slice(0, 320);
+  ta.value = next;
   updateCharCount();
   cacheComposeState();
   switchTab('home');
@@ -3617,6 +3622,7 @@ function toggleComposeAreaCollapse() {
   area.setAttribute('data-compose-collapsed', !isCollapsed);
   btn.textContent = isCollapsed ? '-' : '+';
   btn.title = isCollapsed ? '投稿欄を折りたたむ' : '投稿欄を展開';
+  btn.setAttribute('aria-label', isCollapsed ? '投稿欄を折りたたむ' : '投稿欄を展開');
 }
 
 function bindAll() {
@@ -3686,7 +3692,6 @@ function bindAll() {
   document.querySelectorAll('#trend-category-tabs [data-trend-cat]').forEach(btn => {
     btn.addEventListener('click', () => setTrendCategory(btn.dataset.trendCat));
   });
-  document.getElementById('compose-template-refresh')?.addEventListener('click', renderComposeTemplates);
   document.getElementById('home-pinned-edit')?.addEventListener('click', openPinnedModal);
   document.getElementById('home-pinned-cancel')?.addEventListener('click', closePinnedModal);
   document.getElementById('home-pinned-save')?.addEventListener('click', savePinnedModal);
@@ -3702,6 +3707,7 @@ function bindAll() {
   document.getElementById('compose-text').addEventListener('input', refreshRightStats);
   document.getElementById('compose-text').addEventListener('input', renderComposeHashtagSuggestions);
   document.getElementById('compose-text').addEventListener('input', cacheComposeState);
+  document.getElementById('compose-text').addEventListener('paste', handleComposeImagePaste);
   document.getElementById('reply-restriction').addEventListener('change', e => {
     cacheComposeState();
     setReplyTemplate(e.target.value);
@@ -4165,12 +4171,6 @@ function handleDelegatedClick(e) {
     return;
   }
 
-    const composeChip = e.target.closest('[data-compose-template]');
-    if (composeChip) {
-      applyComposeTemplate(composeChip.dataset.composeTemplate);
-      return;
-    }
-
   const dmStartBtn = e.target.closest('[data-dm-start-did]');
   if (dmStartBtn) {
     startDmWithDid(dmStartBtn.dataset.dmStartDid);
@@ -4208,7 +4208,7 @@ function handleDelegatedClick(e) {
     const tag = String(hashtagInsert.dataset.hashtagInsert || '').trim();
     if (ta && tag) {
       const hasTag = ta.value.includes(tag);
-      ta.value = hasTag ? ta.value : `${ta.value}${ta.value ? ' ' : ''}${tag}`.slice(0, 320);
+      ta.value = hasTag ? ta.value : `${ta.value}${ta.value ? ' ' : ''}${tag}`;
       updateCharCount();
       renderComposeHashtagSuggestions();
       cacheComposeState();
