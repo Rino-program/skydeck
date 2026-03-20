@@ -1203,6 +1203,7 @@ function handleLogout() {
 function bindAll() {
   // ログイン
   document.getElementById('login-btn').addEventListener('click', handleLogin);
+  document.getElementById('login-check-btn')?.addEventListener('click', handleLoginConnectivityCheck);
   document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') handleLogin(); });
 
   // ログアウト
@@ -1322,6 +1323,84 @@ async function handleLogin() {
     errEl.innerHTML = escapeHtml(e.message).replace(/\n/g, '<br>');
     errEl.classList.remove('hidden');
   } finally { setLoading(btn, false); }
+}
+
+async function runProbe(label, url) {
+  const start = performance.now();
+  try {
+    const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+    const elapsed = Math.round(performance.now() - start);
+    return {
+      label,
+      ok: res.ok,
+      status: res.status,
+      statusText: res.statusText || '',
+      elapsed,
+      note: res.ok ? 'OK' : '応答あり（エラー系ステータス）',
+    };
+  } catch (e) {
+    const elapsed = Math.round(performance.now() - start);
+    return {
+      label,
+      ok: false,
+      status: 'ERR',
+      statusText: '',
+      elapsed,
+      note: `接続失敗: ${e?.message || 'network error'}`,
+    };
+  }
+}
+
+function renderLoginCheckResult(lines, level) {
+  const box = document.getElementById('login-check-result');
+  if (!box) return;
+  box.classList.remove('hidden', 'ok', 'warn', 'err');
+  box.classList.add(level);
+  box.textContent = lines.join('\n');
+}
+
+async function handleLoginConnectivityCheck() {
+  const btn = document.getElementById('login-check-btn');
+  const handleInput = document.getElementById('login-handle');
+  if (!btn) return;
+  setLoading(btn, true);
+
+  const now = new Date();
+  const lines = [`接続診断: ${now.toLocaleString('ja-JP')}`];
+  const probes = await Promise.all([
+    runProbe('Public API', 'https://bsky.social/xrpc/com.atproto.server.describeServer'),
+    runProbe('Chat API', 'https://api.bsky.chat/xrpc/_health'),
+  ]);
+
+  probes.forEach(p => {
+    lines.push(`- ${p.label}: ${p.status} ${p.statusText} (${p.elapsed}ms) / ${p.note}`.trim());
+  });
+
+  const rawHandle = String(handleInput?.value || '').replace(/^@/, '').trim();
+  if (rawHandle) {
+    const resolveUrl = `https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(rawHandle)}`;
+    const h = await runProbe('Handle Resolve', resolveUrl);
+    lines.push(`- Handle Resolve: ${h.status} ${h.statusText} (${h.elapsed}ms) / ${h.note}`.trim());
+    if (h.ok) {
+      try {
+        const resp = await fetch(resolveUrl, { method: 'GET', cache: 'no-store' });
+        const data = await resp.json().catch(() => ({}));
+        if (data?.did) lines.push(`  DID: ${data.did}`);
+      } catch {}
+    }
+  } else {
+    lines.push('- Handle Resolve: スキップ（ハンドル未入力）');
+  }
+
+  const allOk = probes.every(p => p.ok);
+  const someOk = probes.some(p => p.ok);
+  const level = allOk ? 'ok' : someOk ? 'warn' : 'err';
+  if (level === 'ok') lines.push('判定: 主要サーバーへ正常に接続できています。');
+  else if (level === 'warn') lines.push('判定: 一部接続に問題があります。ネットワークまたはAPI状態を確認してください。');
+  else lines.push('判定: サーバーへ接続できません。回線・DNS・CSP設定を確認してください。');
+
+  renderLoginCheckResult(lines, level);
+  setLoading(btn, false);
 }
 
 // =============================================
