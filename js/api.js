@@ -254,6 +254,15 @@ async function apiGetAuthorFeed(actor, filter = 'posts_no_replies', cursor = nul
   return res.json();
 }
 
+async function apiGetActorLikes(actor, cursor = null) {
+  const t = actor.replace(/^@/, '');
+  let url = `${BSKY_PUB}/app.bsky.feed.getActorLikes?actor=${encodeURIComponent(t)}&limit=30`;
+  if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+  const res = await fetch(url, { headers: getAuth() });
+  if (!res.ok) throw new Error('いいね一覧取得失敗');
+  return res.json();
+}
+
 async function apiGetNotifications(cursor = null) {
   let url = `${BSKY_PUB}/app.bsky.notification.listNotifications?limit=30`;
   if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;

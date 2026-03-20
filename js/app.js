@@ -4,7 +4,7 @@
 
 const S = {
   session: null, myProfile: null,
-  tab: 'home', homeSubTab: 'following', notifSubTab: 'all', searchTab: 'posts',
+  tab: 'home', homeSubTab: 'following', notifSubTab: 'all', searchTab: 'posts', profileSubTab: 'posts',
   replyTarget: null, pendingImgs: [], quickPendingImgs: [], deleteTarget: null,
   cursors: {}, loading: {},
   activeConvoId: null,
@@ -15,6 +15,10 @@ const S = {
   dmStartDid: null,
   trendCategory: 'all',
   searchComposing: false,
+  isMobileView: false,
+  isTabletView: false,
+  isLandscape: false,
+  isTouch: false,
 };
 
 const QUICK_NOTE_KEY = 'skydeck_quick_note_v1';
@@ -29,10 +33,15 @@ const UI_PREFS_KEY = 'skydeck_ui_prefs_v1';
 const EXPERIENCE_PREFS_KEY = 'skydeck_experience_prefs_v1';
 const ACTIVITY_STATS_KEY = 'skydeck_activity_stats_v1';
 const HOME_PINNED_QUERY_KEY = 'skydeck_home_pinned_query_v1';
+const SCROLL_POSITIONS_KEY = 'skydeck_scroll_positions_v1';
+const QUICK_POST_WIDTH_KEY = 'skydeck_quick_post_width_v1';
+const FEED_WIDTH_PREFS_KEY = 'skydeck_feed_width_prefs_v1';
 const ADMIN_REPORT_HANDLE = 'rino-program.bsky.social';
 const LOGIN_CONSOLE_MAX_LINES = 200;
 const APP_MEMORY_STORAGE = new Map();
 const APP_FETCH_CACHE = new Map();
+const SCROLL_POSITIONS = new Map();
+let FEED_WIDTH_APPLY_LOCK = false;
 
 function safeStorageGet(key) {
   try { return localStorage.getItem(key); }
@@ -127,6 +136,169 @@ function clearLoginConsole() {
 }
 
 // =============================================
+//  レスポンシブ判定
+// =============================================
+function updateViewportState() {
+  const w = window.innerWidth, h = window.innerHeight;
+  S.isMobileView = w < 768;
+  S.isTabletView = w >= 768 && w < 1024;
+  S.isLandscape = h < w && h < 600;
+  S.isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+}
+
+function initViewportListener() {
+  updateViewportState();
+  let resizeTimeout;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(updateViewportState, 250);
+  });
+  window.addEventListener('orientationchange', () => {
+    updateViewportState();
+  });
+}
+
+// =============================================
+//  スクロール位置管理
+// =============================================
+function saveScrollPosition(tabName, subTab = '') {
+  const key = `${tabName}:${subTab}`;
+  const el = document.querySelector('.main-content');
+  if (el) SCROLL_POSITIONS.set(key, el.scrollTop);
+}
+
+function restoreScrollPosition(tabName, subTab = '') {
+  const key = `${tabName}:${subTab}`;
+  const pos = SCROLL_POSITIONS.get(key) || 0;
+  const el = document.querySelector('.main-content');
+  if (el) {
+    setTimeout(() => { el.scrollTop = pos; }, 50);
+  }
+}
+
+function clearScrollPositions() {
+  SCROLL_POSITIONS.clear();
+}
+
+function getQuickPostWidth() {
+  const raw = Number(safeStorageGet(QUICK_POST_WIDTH_KEY) || 520);
+  if (!Number.isFinite(raw)) return 520;
+  return Math.min(860, Math.max(360, raw));
+}
+
+function applyQuickPostWidth(width) {
+  const w = Math.min(860, Math.max(360, Number(width) || 520));
+  const card = document.querySelector('#quick-post-modal .quick-post-card');
+  const range = document.getElementById('quick-post-width');
+  const label = document.getElementById('quick-post-width-value');
+  if (card) {
+    card.style.width = `min(${w}px, calc(100vw - 24px))`;
+    card.style.maxWidth = `${w}px`;
+  }
+  if (range) range.value = String(w);
+  if (label) label.textContent = `${w}px`;
+  safeStorageSet(QUICK_POST_WIDTH_KEY, String(w));
+}
+
+function getFeedWidthPrefs() {
+  const base = { enabled: false, width: 680 };
+  try {
+    const raw = JSON.parse(safeStorageGet(FEED_WIDTH_PREFS_KEY) || 'null');
+    if (!raw || typeof raw !== 'object') return base;
+    return {
+      enabled: raw.enabled === true,
+      width: Math.min(1100, Math.max(560, Number(raw.width || 680))),
+    };
+  } catch {
+    return base;
+  }
+}
+
+function saveFeedWidthPrefs(next) {
+  safeStorageSet(FEED_WIDTH_PREFS_KEY, JSON.stringify(next));
+}
+
+function applyFeedWidth(width) {
+  const w = Math.min(1100, Math.max(560, Number(width) || 680));
+  document.documentElement.style.setProperty('--main-content-max', `${w}px`);
+  const range = document.getElementById('settings-feed-width');
+  const label = document.getElementById('settings-feed-width-value');
+  if (range) range.value = String(w);
+  if (label) label.textContent = `${w}px`;
+}
+
+function applyFeedWidthPrefs() {
+  const p = getFeedWidthPrefs();
+  applyFeedWidth(p.width);
+  const enabledInput = document.getElementById('settings-enable-feed-width');
+  const range = document.getElementById('settings-feed-width');
+  const applyBtn = document.getElementById('settings-feed-width-apply');
+  const resizer = document.getElementById('main-width-resizer');
+  if (enabledInput) enabledInput.checked = p.enabled;
+  if (range) range.disabled = !p.enabled || FEED_WIDTH_APPLY_LOCK;
+  if (applyBtn) applyBtn.disabled = !p.enabled || FEED_WIDTH_APPLY_LOCK;
+  if (resizer) resizer.classList.toggle('hidden', !p.enabled || S.isMobileView || S.isTabletView);
+}
+
+function onFeedWidthSettingsChange() {
+  const enabled = !!document.getElementById('settings-enable-feed-width')?.checked;
+  const width = Number(document.getElementById('settings-feed-width')?.value || 680);
+  saveFeedWidthPrefs({ enabled, width });
+  applyFeedWidthPrefs();
+}
+
+function applyFeedWidthWithLock() {
+  if (FEED_WIDTH_APPLY_LOCK) return;
+  const enabled = !!document.getElementById('settings-enable-feed-width')?.checked;
+  if (!enabled) return;
+  const range = document.getElementById('settings-feed-width');
+  const width = Number(range?.value || 680);
+  const curr = getFeedWidthPrefs();
+  applyFeedWidth(width);
+  saveFeedWidthPrefs({ ...curr, enabled: true, width });
+  FEED_WIDTH_APPLY_LOCK = true;
+  applyFeedWidthPrefs();
+  setTimeout(() => {
+    FEED_WIDTH_APPLY_LOCK = false;
+    applyFeedWidthPrefs();
+  }, 500);
+}
+
+function initMainWidthResizer() {
+  const resizer = document.getElementById('main-width-resizer');
+  if (!resizer) return;
+  let dragging = false;
+
+  const onMove = (clientX) => {
+    const minX = 560 + parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sw'));
+    const maxX = 1100 + parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sw'));
+    const clamped = Math.min(maxX, Math.max(minX, clientX));
+    const nextWidth = Math.round((clamped - parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sw'))) / 10) * 10;
+    applyFeedWidth(nextWidth);
+    const curr = getFeedWidthPrefs();
+    saveFeedWidthPrefs({ ...curr, width: nextWidth });
+  };
+
+  resizer.addEventListener('mousedown', (e) => {
+    if (!getFeedWidthPrefs().enabled) return;
+    dragging = true;
+    resizer.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    onMove(e.clientX);
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove('dragging');
+  });
+}
+
+// =============================================
 //  console.error のポップアップ表示
 // =============================================
 (function () {
@@ -146,6 +318,7 @@ function clearLoginConsole() {
 // =============================================
 async function init() {
   installLoginConsoleCapture();
+  initViewportListener();
   applySavedTheme();
   const sess = loadSession();
   applySavedUiPrefs();
@@ -174,11 +347,14 @@ async function init() {
   renderSearchHistory();
   renderComposeTemplates();
   syncPinnedUi();
+  applyQuickPostWidth(getQuickPostWidth());
+  applyFeedWidthPrefs();
+  initMainWidthResizer();
   bindAll();
 }
 
 function getUiPrefs() {
-  const base = { tab: 'home', homeSubTab: 'following', notifSubTab: 'all', searchTab: 'posts' };
+  const base = { tab: 'home', homeSubTab: 'following', notifSubTab: 'all', searchTab: 'posts', profileSubTab: 'posts' };
   try {
     const raw = JSON.parse(safeStorageGet(UI_PREFS_KEY) || 'null');
     if (!raw || typeof raw !== 'object') return base;
@@ -187,6 +363,7 @@ function getUiPrefs() {
       homeSubTab: ['discover', 'following', 'pinned'].includes(raw.homeSubTab) ? raw.homeSubTab : 'following',
       notifSubTab: raw.notifSubTab === 'mention' || raw.notifSubTab === 'unread' ? raw.notifSubTab : 'all',
       searchTab: ['posts', 'users', 'latest', 'trends'].includes(raw.searchTab) ? raw.searchTab : 'posts',
+      profileSubTab: ['posts', 'replies', 'media', 'likes'].includes(raw.profileSubTab) ? raw.profileSubTab : 'posts',
     };
   } catch {
     return base;
@@ -440,6 +617,7 @@ function saveUiPrefs() {
     homeSubTab: S.homeSubTab,
     notifSubTab: S.notifSubTab,
     searchTab: S.searchTab,
+    profileSubTab: S.profileSubTab,
   };
   safeStorageSet(UI_PREFS_KEY, JSON.stringify(next));
 }
@@ -450,12 +628,14 @@ function applySavedUiPrefs() {
   S.homeSubTab = p.homeSubTab;
   S.notifSubTab = p.notifSubTab;
   S.searchTab = p.searchTab;
+  S.profileSubTab = p.profileSubTab;
 }
 
 function syncSubTabUi() {
   document.querySelectorAll('#tab-home .sub-tab').forEach(b => b.classList.toggle('active', b.dataset.sub === S.homeSubTab));
   document.querySelectorAll('#tab-notifications .sub-tab').forEach(b => b.classList.toggle('active', b.dataset.sub === S.notifSubTab));
   document.querySelectorAll('#tab-search .sub-tab').forEach(b => b.classList.toggle('active', b.dataset.sub === S.searchTab));
+  document.querySelectorAll('#tab-profile .sub-tab').forEach(b => b.classList.toggle('active', b.dataset.sub === S.profileSubTab));
 }
 
 function getBootTab() {
@@ -1001,13 +1181,32 @@ async function loadProfile() {
   const feed = document.getElementById('profile-feed');
   feed.innerHTML = renderSpinner();
   const actor = S.myProfile?.handle || S.session?.handle;
-  const data = await fetchWithLocalCache(cacheKey(['profile', actor, 'first']), 30000, () => withAuth(() => apiGetAuthorFeed(actor, 'posts_no_replies', null)));
+  const tab = S.profileSubTab;
+  const data = await fetchWithLocalCache(cacheKey(['profile', actor, tab, 'first']), 30000, () => {
+    if (tab === 'likes') return withAuth(() => apiGetActorLikes(actor, null));
+    const filter = tab === 'replies' ? 'posts_with_replies' : tab === 'media' ? 'posts_with_media' : 'posts_no_replies';
+    return withAuth(() => apiGetAuthorFeed(actor, filter, null));
+  });
   S.cursors['profile'] = data.cursor || null;
   feed.innerHTML = '';
-  if (!data.feed?.length) { feed.innerHTML = renderEmpty('投稿がありません'); return; }
+  const rows = data.feed || [];
+  if (!rows.length) {
+    const msg = tab === 'likes' ? 'いいねがありません' : tab === 'media' ? 'メディア投稿がありません' : tab === 'replies' ? '返信投稿がありません' : '投稿がありません';
+    feed.innerHTML = renderEmpty(msg);
+    return;
+  }
   const myDid = S.session?.did;
-  data.feed.forEach(item => appendCards(feed, renderPostCard(item, myDid)));
+  rows.forEach(item => appendCards(feed, renderPostCard(item, myDid)));
   if (data.cursor) addLoadMoreBtn(feed, 'profile');
+}
+
+function switchProfileSubTab(sub) {
+  S.profileSubTab = ['posts', 'replies', 'media', 'likes'].includes(sub) ? sub : 'posts';
+  S.cursors.profile = null;
+  saveUiPrefs();
+  document.querySelectorAll('#tab-profile .sub-tab').forEach(b => b.classList.toggle('active', b.dataset.sub === S.profileSubTab));
+  document.getElementById('profile-feed').innerHTML = '';
+  loadProfile();
 }
 
 // =============================================
@@ -1743,11 +1942,48 @@ async function confirmDelete() {
       card.style.opacity = '0'; card.style.transform = 'translateX(20px)';
       setTimeout(() => card.remove(), 300);
     });
+    clearFetchCache('profile::'); 
+    clearFetchCache('home::');
     showToast('削除しました', 'success');
     document.getElementById('delete-modal').classList.add('hidden'); S.deleteTarget = null;
   } catch(e) { showToast(e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '削除する'; }
 }
+
+// =============================================
+//  画像ビューア
+// =============================================
+let currentImages = []; let currentImageIndex = 0; let imageViewerZoomed = false;
+function openImageViewer(images, startIndex = 0) {
+  if (!Array.isArray(images) || !images.length) return;
+  currentImages = images;
+  currentImageIndex = Math.max(0, Math.min(startIndex, images.length - 1));
+  imageViewerZoomed = false;
+  showImageAtIndex(currentImageIndex);
+  document.getElementById('image-viewer-modal').classList.remove('hidden');
+}
+function closeImageViewer() { document.getElementById('image-viewer-modal').classList.add('hidden'); currentImages = []; currentImageIndex = 0; imageViewerZoomed = false; resetImageViewerZoom(); }
+function showImageAtIndex(idx) {
+  if (idx < 0 || idx >= currentImages.length) return;
+  currentImageIndex = idx;
+  const img = currentImages[idx];
+  const fullsize = typeof img === 'string' ? img : (img.fullsize || img.thumb || '');
+  const alt = typeof img === 'object' ? (img.alt || '') : '';
+  const imgEl = document.getElementById('image-viewer-img');
+  if (!imgEl) return;
+  imgEl.style.width = '';
+  imgEl.style.height = '';
+  imgEl.src = fullsize;
+  imgEl.alt = alt;
+  const openLink = document.getElementById('image-viewer-open');
+  if (openLink) openLink.href = fullsize;
+  const counter = document.getElementById('image-viewer-counter');
+  if (counter) counter.textContent = `${currentImageIndex + 1} / ${currentImages.length}`;
+  const nav = document.getElementById('image-viewer-nav');
+  if (nav) nav.classList.toggle('hidden', currentImages.length <= 1);
+}
+function navigateImageViewer(dir) { imageViewerZoomed = false; resetImageViewerZoom(); showImageAtIndex(currentImageIndex + dir); }
+function resetImageViewerZoom() { const img = document.getElementById('image-viewer-img'); if (img) img.style.transform = ''; }
 
 // =============================================
 //  プロフィール編集
@@ -1796,7 +2032,13 @@ async function handleLoadMore(btn) {
       if (data.cursor) addLoadMoreBtn(feed, tab);
     } else if (tab === 'profile') {
       const actor = S.myProfile?.handle;
-      const data = await withAuth(() => apiGetAuthorFeed(actor, 'posts_no_replies', cursor));
+      let data;
+      if (S.profileSubTab === 'likes') {
+        data = await withAuth(() => apiGetActorLikes(actor, cursor));
+      } else {
+        const filter = S.profileSubTab === 'replies' ? 'posts_with_replies' : S.profileSubTab === 'media' ? 'posts_with_media' : 'posts_no_replies';
+        data = await withAuth(() => apiGetAuthorFeed(actor, filter, cursor));
+      }
       btn.remove();
       data.feed?.forEach(i => appendCards(feed, renderPostCard(i, myDid)));
       S.cursors[tab] = data.cursor || null;
@@ -1828,6 +2070,41 @@ async function checkNotif() {
 }
 function startNotifPoll() { checkNotif(); notifInterval = setInterval(checkNotif, 30000); }
 function stopNotifPoll()  { clearInterval(notifInterval); notifInterval = null; }
+
+function openLogoutActionModal() {
+  document.getElementById('logout-action-modal')?.classList.remove('hidden');
+}
+
+function closeLogoutActionModal() {
+  document.getElementById('logout-action-modal')?.classList.add('hidden');
+}
+
+function confirmAndLogout() {
+  const ok = window.confirm('ログアウトしますか？\nローカルのセッション情報を削除します。');
+  if (!ok) return;
+  closeLogoutActionModal();
+  handleLogout();
+}
+
+function tryClosePageOnly() {
+  closeLogoutActionModal();
+  window.close();
+  setTimeout(() => {
+    if (!window.closed) {
+      showToast('このページを閉じられませんでした。ブラウザのタブを閉じてください。', 'info', 4500);
+    }
+  }, 120);
+}
+
+function handleSidebarLogoutClick() {
+  openLogoutActionModal();
+}
+
+function handleSettingsLogoutClick() {
+  const ok = window.confirm('ログアウトしますか？\nローカルのセッション情報を削除します。');
+  if (!ok) return;
+  handleLogout();
+}
 
 function handleLogout() {
   clearSession(); S.session = null; S.myProfile = null;
@@ -1899,6 +2176,7 @@ function handleGlobalKeydown(e) {
   const typing = isTypingTarget(e.target);
 
   if (e.key === 'Escape') {
+    closeLogoutActionModal();
     closeShortcutsModal();
     if (!document.getElementById('quick-post-modal')?.classList.contains('hidden')) closeQuickPostModal();
     return;
@@ -1909,6 +2187,9 @@ function handleGlobalKeydown(e) {
     focusSearchInput();
     return;
   }
+
+  // Ctrl/Cmd/Alt 系のショートカットは、専用ハンドラ以外で吸わない
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   if (!typing && key === '?') {
     e.preventDefault();
@@ -1942,6 +2223,16 @@ function handleGlobalKeydown(e) {
 // =============================================
 //  イベント一括バインド
 // =============================================
+function toggleComposeAreaCollapse() {
+  const area = document.getElementById('compose-area');
+  const btn = document.getElementById('compose-collapse-btn');
+  if (!area || !btn) return;
+  const isCollapsed = area.getAttribute('data-compose-collapsed') === 'true';
+  area.setAttribute('data-compose-collapsed', !isCollapsed);
+  btn.textContent = isCollapsed ? '-' : '+';
+  btn.title = isCollapsed ? '投稿欄を折りたたむ' : '投稿欄を展開';
+}
+
 function bindAll() {
   // ログイン
   document.getElementById('login-btn').addEventListener('click', handleLogin);
@@ -1950,7 +2241,13 @@ function bindAll() {
   document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') handleLogin(); });
 
   // ログアウト
-  document.getElementById('logout-btn').addEventListener('click', handleLogout);
+  document.getElementById('logout-btn').addEventListener('click', handleSidebarLogoutClick);
+  document.getElementById('logout-action-close-page')?.addEventListener('click', tryClosePageOnly);
+  document.getElementById('logout-action-cancel')?.addEventListener('click', closeLogoutActionModal);
+  document.getElementById('logout-action-logout')?.addEventListener('click', confirmAndLogout);
+  document.getElementById('logout-action-modal')?.addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeLogoutActionModal();
+  });
 
   // ナビ
   document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
@@ -1959,6 +2256,7 @@ function bindAll() {
   document.querySelectorAll('#tab-home .sub-tab').forEach(b => b.addEventListener('click', () => switchHomeSubTab(b.dataset.sub)));
   document.querySelectorAll('#tab-notifications .sub-tab').forEach(b => b.addEventListener('click', () => switchNotifSubTab(b.dataset.sub)));
   document.querySelectorAll('#tab-search .sub-tab').forEach(b => b.addEventListener('click', () => switchSearchTab(b.dataset.sub)));
+  document.querySelectorAll('#tab-profile .sub-tab').forEach(b => b.addEventListener('click', () => switchProfileSubTab(b.dataset.sub)));
 
   // リフレッシュ
   document.querySelectorAll('.refresh-btn').forEach(b => b.addEventListener('click', () => {
@@ -2023,6 +2321,10 @@ function bindAll() {
 
   // 左下クイック投稿
   document.getElementById('quick-post-fab')?.addEventListener('click', openQuickPostModal);
+  document.getElementById('compose-collapse-btn')?.addEventListener('click', toggleComposeAreaCollapse);
+  document.getElementById('quick-post-image-input')?.addEventListener('change', handleQuickImageSelect);
+  document.getElementById('quick-post-width')?.addEventListener('input', e => applyQuickPostWidth(e.target.value));
+  document.getElementById('quick-post-text')?.addEventListener('input', updateQuickPostCount);
   document.getElementById('quick-post-cancel')?.addEventListener('click', closeQuickPostModal);
   document.getElementById('quick-post-submit')?.addEventListener('click', handleQuickPost);
   document.getElementById('quick-post-text')?.addEventListener('input', updateQuickPostCount);
@@ -2070,9 +2372,15 @@ function bindAll() {
   document.getElementById('list-back-btn').addEventListener('click', () => document.getElementById('list-feed-container').classList.add('hidden'));
 
   // 設定画面のログアウト
-  document.getElementById('settings-logout-btn')?.addEventListener('click', handleLogout);
+  document.getElementById('settings-logout-btn')?.addEventListener('click', handleSettingsLogoutClick);
   document.getElementById('theme-toggle-btn')?.addEventListener('click', toggleThemeMode);
   document.getElementById('settings-show-control-deck')?.addEventListener('change', onSettingsControlDeckChange);
+  document.getElementById('settings-enable-feed-width')?.addEventListener('change', onFeedWidthSettingsChange);
+  document.getElementById('settings-feed-width')?.addEventListener('input', e => {
+    const label = document.getElementById('settings-feed-width-value');
+    if (label) label.textContent = `${Number(e.target.value || 680)}px`;
+  });
+  document.getElementById('settings-feed-width-apply')?.addEventListener('click', applyFeedWidthWithLock);
   document.getElementById('settings-japan-mode')?.addEventListener('change', handleExperienceSettingsChange);
   document.getElementById('settings-japan-trends')?.addEventListener('change', handleExperienceSettingsChange);
   document.getElementById('settings-personalize')?.addEventListener('change', handleExperienceSettingsChange);
@@ -2096,6 +2404,35 @@ function bindAll() {
   document.getElementById('shortcuts-close-btn')?.addEventListener('click', closeShortcutsModal);
   document.getElementById('shortcuts-modal')?.addEventListener('click', e => {
     if (e.target === e.currentTarget) closeShortcutsModal();
+  });
+
+  // 画像ビューア
+  document.getElementById('image-viewer-close')?.addEventListener('click', closeImageViewer);
+  document.getElementById('image-viewer-prev')?.addEventListener('click', () => navigateImageViewer(-1));
+  document.getElementById('image-viewer-next')?.addEventListener('click', () => navigateImageViewer(1));
+  document.getElementById('image-viewer-img')?.addEventListener('dblclick', () => {
+    const img = document.getElementById('image-viewer-img');
+    if (img) {
+      imageViewerZoomed = !imageViewerZoomed;
+      if (imageViewerZoomed) {
+        img.style.transform = 'scale(2)';
+        img.style.cursor = 'zoom-out';
+      } else {
+        img.style.transform = '';
+        img.style.cursor = 'default';
+      }
+    }
+  });
+  document.getElementById('image-viewer-modal')?.addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeImageViewer();
+  });
+  document.addEventListener('keydown', e => {
+    const modal = document.getElementById('image-viewer-modal');
+    if (modal && !modal.classList.contains('hidden')) {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); navigateImageViewer(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); navigateImageViewer(1); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeImageViewer(); }
+    }
   });
 
   // 委任クリック（フィード内全て）
@@ -2264,6 +2601,47 @@ async function handleLoginConnectivityCheck() {
 //  委任クリックハンドラー（全フィード共通）
 // =============================================
 function handleDelegatedClick(e) {
+  // 画像をクリック
+  const imgItem = e.target.closest('.post-images .img-item');
+  if (imgItem) {
+    const container = e.target.closest('.post-images');
+    if (container && container.dataset.imagesJson) {
+      try {
+        const images = JSON.parse(container.dataset.imagesJson);
+        const idx = parseInt(imgItem.dataset.imgIndex || '0');
+        openImageViewer(images, idx);
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      } catch (err) { console.error('画像データ解析エラー:', err); }
+    }
+  }
+
+  // プロフィール画像・バナーをクリック
+  const profileImg = e.target.closest('[data-profile-img-click]');
+  if (profileImg && profileImg.tagName === 'IMG') {
+    const src = profileImg.src || profileImg.dataset.profileImgSrc;
+    if (src) {
+      openImageViewer([{fullsize: src}], 0);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+  }
+  const profileBanner = e.target.closest('[data-profile-banner-click]');
+  if (profileBanner) {
+    const bgImg = window.getComputedStyle(profileBanner).backgroundImage;
+    if (bgImg && bgImg !== 'none') {
+      const match = bgImg.match(/url\(["']?([^"'()]+)["']?\)/);
+      if (match && match[1]) {
+        openImageViewer([{fullsize: match[1]}], 0);
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+    }
+  }
+
   const hashLink = e.target.closest('[data-hashtag-search]');
   if (hashLink) {
     e.preventDefault();

@@ -87,8 +87,35 @@ function renderSpinner() {
   return `<div class="feed-spinner"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-dasharray="40" stroke-dashoffset="20" class="spin-el"/></svg></div>`;
 }
 
-function renderEmpty(msg = '表示する内容がありません') {
-  return `<div class="empty-state"><div class="empty-icon">🌤</div><div>${escapeHtml(msg)}</div></div>`;
+function renderEmpty(msg = '表示する内容がありません', type = 'default') {
+  const icons = {
+    default: '🌤',
+    home: '📲',
+    search: '🔍',
+    notifications: '🔔',
+    dm: '💬',
+    profile: '👤',
+    likes: '❤️',
+    replies: '💬',
+    media: '🖼️',
+    error: '⚠️',
+    network: '📡',
+  };
+  const icon = icons[type] || icons.default;
+  return `<div class="empty-state"><div class="empty-icon">${icon}</div><div>${escapeHtml(msg)}</div></div>`;
+}
+
+function renderError(msg = 'エラーが発生しました', actionBtn = null) {
+  let html = `<div class="empty-state" style="color:var(--danger)"><div class="empty-icon">⚠️</div><div>${escapeHtml(msg)}</div>`;
+  if (actionBtn) {
+    html += `<button class="btn-sm" style="margin-top:12px">${escapeHtml(actionBtn.text)}</button>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderLoadingState() {
+  return `<div class="feed-spinner"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="40" stroke-dashoffset="20" class="spin-el"/></svg><div style="margin-top:12px;text-align:center;color:var(--text-3);font-size:.85rem">読み込み中...</div></div>`;
 }
 
 function appendCards(el, html) {
@@ -119,8 +146,8 @@ function getEmbedImages(embed) {
 
 function renderImagesGrid(images) {
   const n = Math.min(images.length, 4);
-  return `<div class="post-images count-${n}">${images.slice(0,4).map(img =>
-    `<div class="img-item"><img src="${escapeHtml(sanitizeHttpUrl(img.thumb||img.fullsize||''))}" alt="${escapeHtml(img.alt||'')}" loading="lazy" onerror="this.parentElement.style.display='none'"/></div>`
+  return `<div class="post-images count-${n}" data-images-json="${escapeHtml(JSON.stringify(images.slice(0,4).map(img => ({fullsize: sanitizeHttpUrl(img.fullsize||img.thumb||''), alt: img.alt||''}))))}">${images.slice(0,4).map((img, idx) =>
+    `<div class="img-item cursor-pointer" data-img-index="${idx}"><img src="${escapeHtml(sanitizeHttpUrl(img.thumb||img.fullsize||''))}" alt="${escapeHtml(img.alt||'')}" loading="lazy" onerror="this.parentElement.style.display='none'"/></div>`
   ).join('')}</div>`;
 }
 
@@ -327,9 +354,9 @@ function renderProfilePanel(profile, options = {}) {
   const isMe        = profile.did === loadSession()?.did;
   const canDm       = !!options.canDm;
   return `<div class="profile-panel">
-  <div class="profile-banner" style="${buildSafeBannerStyle(profile.banner)}"></div>
+  <div class="profile-banner cursor-pointer" data-profile-banner-click style="${buildSafeBannerStyle(profile.banner)}"></div>
   <div class="profile-panel-header">
-    <img class="prof-avatar-lg" src="${escapeHtml(sanitizeHttpUrl(profile.avatar||''))}" alt="" onerror="this.src=''"/>
+    <img class="prof-avatar-lg cursor-pointer" data-profile-img-click data-profile-img-src="${escapeHtml(sanitizeHttpUrl(profile.avatar||''))}" src="${escapeHtml(sanitizeHttpUrl(profile.avatar||''))}" alt="" onerror="this.src=''"/>
     <div class="prof-panel-meta">
       <div class="prof-panel-name">${escapeHtml(profile.displayName||profile.handle)}</div>
       <div class="prof-panel-handle">@${escapeHtml(profile.handle)}</div>

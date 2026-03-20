@@ -2,12 +2,19 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0,user-scalable=yes,viewport-fit=cover"/>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https: wss: https://www.google-analytics.com https://region1.google-analytics.com; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests"/>
   <meta name="referrer" content="strict-origin-when-cross-origin"/>
   <meta http-equiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=(), payment=(), usb=()"/>
+  <meta name="theme-color" content="#0085ff" media="(prefers-color-scheme: light)"/>
+  <meta name="theme-color" content="#32a6ff" media="(prefers-color-scheme: dark)"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="SkyDeck"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
   <title>SkyDeck — Bluesky Client</title>
   <link rel="icon" type="image/svg+xml" href="assets/skydeck-mark.svg"/>
+  <link rel="apple-touch-icon" href="assets/skydeck-mark.svg"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="css/style.css"/>
@@ -124,7 +131,8 @@
   <main class="main-content">
 
     <!-- 投稿エリア -->
-    <section class="compose-area" id="compose-area">
+    <section class="compose-area" id="compose-area" data-compose-collapsed="false">
+      <button id="compose-collapse-btn" class="compose-collapse-btn" title="投稿欄を折りたたむ" aria-label="投稿欄を折りたたむ">−</button>
       <div class="compose-inner">
         <img id="compose-avatar" class="compose-av" src="" alt=""/>
         <div class="compose-body">
@@ -281,9 +289,9 @@
 
     <!-- ===== PROFILE ===== -->
     <section id="tab-profile" class="tab-section hidden">
-      <div class="profile-banner" id="prof-banner-img"></div>
+      <div class="profile-banner cursor-pointer" id="prof-banner-img" data-profile-banner-click></div>
       <div class="profile-header">
-        <img id="prof-avatar-img" class="prof-avatar" src="" alt=""/>
+        <img id="prof-avatar-img" class="prof-avatar cursor-pointer" src="" alt="" data-profile-img-click/>
         <div class="profile-meta">
           <div id="prof-displayname" class="prof-name">—</div>
           <div id="prof-handle" class="prof-handle">@—</div>
@@ -309,7 +317,12 @@
         </div>
       </details>
       <div class="section-head" style="top:auto;position:static">
-        <h2 class="section-title">投稿一覧</h2>
+        <div class="sub-tabs">
+          <button class="sub-tab active" data-sub="posts">投稿</button>
+          <button class="sub-tab" data-sub="replies">返信</button>
+          <button class="sub-tab" data-sub="media">メディア</button>
+          <button class="sub-tab" data-sub="likes">いいね</button>
+        </div>
         <button class="refresh-btn" data-target="profile"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
       </div>
       <div id="profile-feed" class="feed"></div>
@@ -335,6 +348,8 @@
           <h3 class="settings-section-title">表示</h3>
           <div class="settings-row"><div><div class="settings-row-label">ダークモード</div><div class="settings-row-desc">見た目を切り替えます</div></div><button id="theme-toggle-btn" class="btn-sm">切り替え</button></div>
           <div class="settings-row"><div><div class="settings-row-label">Control Deck</div><div class="settings-row-desc">右下パネルの表示/非表示</div></div><label class="right-toggle"><input id="settings-show-control-deck" type="checkbox" checked/> 表示する</label></div>
+          <div class="settings-row"><div><div class="settings-row-label">投稿表示幅を手動調整</div><div class="settings-row-desc">ONで右端ハンドルとスライダーから幅変更できます</div></div><label class="right-toggle"><input id="settings-enable-feed-width" type="checkbox"/> 有効</label></div>
+          <div class="settings-row"><div><div class="settings-row-label">投稿表示幅</div><div class="settings-row-desc"><span id="settings-feed-width-value">680px</span></div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><input id="settings-feed-width" type="range" min="560" max="1100" step="10" value="680" style="width:180px" disabled/><button id="settings-feed-width-apply" class="btn-sm" disabled>適用</button></div></div>
           <div class="settings-row"><div><div class="settings-row-label">ショートカット一覧</div><div class="settings-row-desc">キーボード操作の一覧を表示</div></div><button id="settings-shortcuts-btn" class="btn-sm">表示</button></div>
         </div>
         <div class="settings-section">
@@ -345,7 +360,7 @@
         </div>
         <div class="settings-section">
           <h3 class="settings-section-title">サポート</h3>
-          <div class="settings-row"><div><div class="settings-row-label">管理者へ報告</div><div class="settings-row-desc">@rino-program.bsky.social への返信で報告文を作成</div></div><button id="settings-report-admin-btn" class="btn-sm">報告する</button></div>
+          <div class="settings-row"><div><div class="settings-row-label">管理者へ報告</div><div class="settings-row-desc">@rino-program.bsky.social への返信で報告文を作成<br/>機能依頼やバグ報告などができます。</div></div><button id="settings-report-admin-btn" class="btn-sm">報告する</button></div>
         </div>
         <div class="settings-section">
           <h3 class="settings-section-title">セッション</h3>
@@ -356,39 +371,52 @@
     </section>
 
   </main>
+
+  <div id="main-width-resizer" class="main-width-resizer hidden" title="投稿表示幅を調整"></div>
 </div>
 
 <!-- クイック投稿ポップアップ -->
 <div id="quick-post-modal" class="modal-overlay hidden">
   <div class="modal-card quick-post-card">
-    <h3 class="modal-title">クイック投稿</h3>
-    <p class="modal-body">すぐに投稿できます（320文字・画像最大4枚）</p>
+    <h3 class="modal-title">✨ クイック投稿</h3>
+    <div class="modal-body" style="font-size:.82rem;margin-bottom:12px">さっと投稿できます • 最大320文字・画像4枚</div>
     <textarea id="quick-post-text" class="form-input" rows="5" maxlength="320" placeholder="今何を考えていますか？"></textarea>
     <div id="quick-post-preview" class="preview-area hidden"></div>
     <div id="quick-image-assist" class="image-assist hidden">
-      <div class="image-assist-head">画像投稿アシスト</div>
+      <div class="image-assist-head">📸 画像情報</div>
       <div id="quick-image-assist-text" class="image-assist-text">画像未選択</div>
     </div>
-    <div class="quick-post-tools">
-      <label class="tool-btn" title="画像を追加（最大4枚）">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><polyline points="21 15 16 10 5 21"/></svg>
-        <input type="file" id="quick-post-image-input" accept="image/*" multiple style="display:none"/>
-      </label>
-      <select id="quick-post-restriction" class="restriction-select" title="返信できるユーザーを設定">
-        <option value="everybody">全員が返信可</option>
-        <option value="following">フォロー中のみ</option>
-        <option value="followers">フォロワーのみ</option>
-        <option value="mentionedUsers">メンションしたユーザーのみ</option>
-        <option value="nobody">返信不可</option>
-      </select>
+    <div style="border-top:1px solid var(--border-l);margin-top:12px;padding-top:12px">
+      <div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:8px;letter-spacing:.05em">📎 ツール</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+        <label for="quick-post-width" style="font-size:.78rem;color:var(--text-2)">横幅</label>
+        <div style="display:flex;align-items:center;gap:8px;flex:1">
+          <input id="quick-post-width" type="range" min="360" max="860" step="10" value="520" style="flex:1"/>
+          <span id="quick-post-width-value" class="char-count" style="min-width:54px;text-align:right">520px</span>
+        </div>
+      </div>
+      <div class="quick-post-tools" style="gap:8px">
+        <label class="tool-btn" title="画像を追加（最大4枚）" style="flex:1;background:var(--primary-s);border-radius:var(--rs);padding:8px;text-align:center;cursor:pointer;font-size:.8rem;font-weight:600;color:var(--primary)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><polyline points="21 15 16 10 5 21"/></svg>
+          <span>画像追加</span>
+          <input type="file" id="quick-post-image-input" accept="image/*" multiple style="display:none"/>
+        </label>
+        <select id="quick-post-restriction" class="restriction-select" title="返信できるユーザーを設定" style="flex:1;padding:8px">
+          <option value="everybody">全員が返信可</option>
+          <option value="following">フォロー中のみ</option>
+          <option value="followers">フォロワーのみ</option>
+          <option value="mentionedUsers">メンションのみ</option>
+          <option value="nobody">返信不可</option>
+        </select>
+      </div>
     </div>
-    <div class="quick-post-footer">
+    <div style="border-top:1px solid var(--border-l);margin-top:12px;padding-top:12px;display:flex;justify-content:space-between;align-items:center">
       <span id="quick-post-count" class="char-count">320</span>
-      <div class="quick-post-actions">
-        <button id="quick-post-cancel" class="btn-modal-cancel">閉じる</button>
-        <button id="quick-post-submit" class="btn-post">
+      <div class="quick-post-actions" style="gap:8px">
+        <button id="quick-post-cancel" class="btn-modal-cancel">キャンセル</button>
+        <button id="quick-post-submit" class="btn-post" style="padding:8px 16px">
           <span class="btn-text">投稿する</span>
-          <span class="btn-spinner hidden"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40" stroke-dashoffset="20" class="spin-el"/></svg></span>
+          <span class="btn-spinner hidden"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40" stroke-dashoffset="20" class="spin-el"/></svg></span>
         </button>
       </div>
     </div>
@@ -494,6 +522,20 @@
   </div>
 </div>
 
+<div id="logout-action-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3 class="modal-title">操作を選択</h3>
+    <p class="modal-body">このページを閉じるか、ログアウトするかを選べます。</p>
+    <div class="modal-actions" style="justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <button id="logout-action-close-page" class="btn-modal-cancel" type="button">閉じる</button>
+      <div style="display:flex;gap:8px">
+        <button id="logout-action-cancel" class="btn-modal-cancel" type="button">キャンセル</button>
+        <button id="logout-action-logout" class="btn-modal-danger" type="button">ログアウト</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="shortcuts-modal" class="modal-overlay hidden">
   <div class="modal-card shortcuts-card">
     <h3 class="modal-title">キーボードショートカット</h3>
@@ -546,6 +588,24 @@
     <div class="modal-actions" style="margin-top:14px">
       <button id="search-ime-cancel" class="btn-modal-cancel" type="button">閉じる</button>
       <button id="search-ime-apply" class="btn-post" type="button">検索に反映</button>
+    </div>
+  </div>
+</div>
+
+<!-- Image Viewer Modal -->
+<div id="image-viewer-modal" class="modal-overlay hidden">
+  <div class="modal-card image-viewer-card">
+    <button id="image-viewer-close" class="image-viewer-close" type="button" title="閉じる">×</button>
+    <div class="image-viewer-container">
+      <img id="image-viewer-img" src="" alt="画像" class="image-viewer-img"/>
+    </div>
+    <div id="image-viewer-nav" class="image-viewer-nav hidden">
+      <button id="image-viewer-prev" class="image-viewer-btn" type="button">‹</button>
+      <div id="image-viewer-counter" class="image-viewer-counter"></div>
+      <button id="image-viewer-next" class="image-viewer-btn" type="button">›</button>
+      <a id="image-viewer-open" class="image-viewer-btn" type="button" target="_blank" rel="noopener noreferrer" title="新しいタブで開く">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </a>
     </div>
   </div>
 </div>
