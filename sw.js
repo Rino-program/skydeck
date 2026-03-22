@@ -1,7 +1,8 @@
-const CACHE_NAME = 'skywebpro-static-v2';
+const CACHE_NAME = 'skywebpro-static-v1.0.0';
 const STATIC_ASSETS = [
   './',
   './index.html',
+  './manifest.webmanifest',
   './css/style.css',
   './js/constants.js',
   './js/utils.js',
@@ -9,6 +10,8 @@ const STATIC_ASSETS = [
   './js/ui.js',
   './js/app.js',
   './assets/skywebpro-mark.svg',
+  './assets/icon-192.png',
+  './assets/icon-512.png',
 ];
 
 self.addEventListener('install', event => {
