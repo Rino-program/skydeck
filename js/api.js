@@ -20,6 +20,8 @@ const STORAGE_VERSION_KEY = 'skywebpro_storage_version';
 const CURRENT_STORAGE_VERSION = 'v1';
 const RELOGIN_REASON_KEY = 'skywebpro_relogin_reason';
 const SESSION_SAVED_AT_KEY = 'skywebpro_session_saved_at';
+const SESSION_ACCOUNTS_KEY = 'skywebpro_session_accounts_v1';
+const ACTIVE_SESSION_DID_KEY = 'skywebpro_active_session_did_v1';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const LEGACY_SESSION_KEYS = ['skywebpro_session_v3'];
 const LEGACY_DRAFT_KEYS = ['skywebpro_drafts_v2'];
@@ -130,21 +132,201 @@ function hasLegacySession() {
   return LEGACY_SESSION_KEYS.some(k => !!safeStorageGetItem(k));
 }
 
+function sanitizeSessionObject(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const did = String(raw.did || '').trim();
+  const accessJwt = String(raw.accessJwt || '').trim();
+  const refreshJwt = String(raw.refreshJwt || '').trim();
+  if (!did || !accessJwt || !refreshJwt) return null;
+  return {
+    ...raw,
+    did,
+    accessJwt,
+    refreshJwt,
+    handle: String(raw.handle || '').trim(),
+  };
+}
+
+function readSessionAccountsStore() {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(safeStorageGetItem(SESSION_ACCOUNTS_KEY) || 'null');
+  } catch {
+    parsed = null;
+  }
+
+  const accountsRaw = Array.isArray(parsed?.accounts) ? parsed.accounts : [];
+  const accounts = accountsRaw.map(acc => {
+    const session = sanitizeSessionObject(acc?.session);
+    if (!session) return null;
+    const did = String(acc?.did || session.did || '').trim();
+    if (!did) return null;
+    return {
+      did,
+      handle: String(acc?.handle || session.handle || '').trim(),
+      savedAt: Number(acc?.savedAt || 0) || Date.now(),
+      session,
+    };
+  }).filter(Boolean);
+
+  const activeDidRaw = String(parsed?.activeDid || safeStorageGetItem(ACTIVE_SESSION_DID_KEY) || '').trim();
+  const activeDid = accounts.some(acc => acc.did === activeDidRaw)
+    ? activeDidRaw
+    : (accounts[0]?.did || '');
+
+  return { accounts, activeDid };
+}
+
+function writeSessionAccountsStore(store) {
+  const payload = {
+    version: 1,
+    activeDid: String(store?.activeDid || ''),
+    accounts: (Array.isArray(store?.accounts) ? store.accounts : []).map(acc => ({
+      did: String(acc.did || ''),
+      handle: String(acc.handle || acc.session?.handle || ''),
+      savedAt: Number(acc.savedAt || Date.now()),
+      session: sanitizeSessionObject(acc.session),
+    })).filter(acc => !!acc.did && !!acc.session),
+  };
+  safeStorageSetItem(SESSION_ACCOUNTS_KEY, JSON.stringify(payload));
+  if (payload.activeDid) safeStorageSetItem(ACTIVE_SESSION_DID_KEY, payload.activeDid);
+  else safeStorageRemoveItem(ACTIVE_SESSION_DID_KEY);
+}
+
+function getActiveAccountFromStore(store) {
+  if (!store || !Array.isArray(store.accounts) || !store.accounts.length) return null;
+  return store.accounts.find(acc => acc.did === store.activeDid) || store.accounts[0] || null;
+}
+
+function mirrorLegacySession(activeAccount) {
+  if (!activeAccount?.session) {
+    safeStorageRemoveItem(SESSION_KEY);
+    safeStorageRemoveItem(SESSION_SAVED_AT_KEY);
+    return;
+  }
+  safeStorageSetItem(SESSION_KEY, JSON.stringify(activeAccount.session));
+  safeStorageSetItem(SESSION_SAVED_AT_KEY, String(Number(activeAccount.savedAt || Date.now())));
+}
+
+function upsertSessionAccount(session, options = {}) {
+  const nextSession = sanitizeSessionObject(session);
+  if (!nextSession) return null;
+
+  const store = readSessionAccountsStore();
+  const idx = store.accounts.findIndex(acc => acc.did === nextSession.did);
+  const now = Date.now();
+  const account = {
+    did: nextSession.did,
+    handle: String(nextSession.handle || '').trim(),
+    savedAt: now,
+    session: nextSession,
+  };
+
+  if (idx >= 0) store.accounts[idx] = account;
+  else store.accounts.unshift(account);
+
+  if (options.setActive !== false || !store.activeDid) {
+    store.activeDid = nextSession.did;
+  }
+
+  writeSessionAccountsStore(store);
+  mirrorLegacySession(getActiveAccountFromStore(store));
+  return nextSession;
+}
+
+function migrateLegacySingleSessionIfNeeded() {
+  const existingStore = readSessionAccountsStore();
+  if (existingStore.accounts.length) {
+    mirrorLegacySession(getActiveAccountFromStore(existingStore));
+    return;
+  }
+
+  let legacy = null;
+  try {
+    legacy = JSON.parse(safeStorageGetItem(SESSION_KEY) || 'null');
+  } catch {
+    legacy = null;
+  }
+  const session = sanitizeSessionObject(legacy);
+  if (!session) return;
+
+  const savedAt = Number(safeStorageGetItem(SESSION_SAVED_AT_KEY) || Date.now()) || Date.now();
+  writeSessionAccountsStore({
+    activeDid: session.did,
+    accounts: [{ did: session.did, handle: String(session.handle || ''), savedAt, session }],
+  });
+  mirrorLegacySession({ did: session.did, handle: String(session.handle || ''), savedAt, session });
+}
+
+function clearAllSessions() {
+  safeStorageRemoveItem(SESSION_KEY);
+  safeStorageRemoveItem(SESSION_SAVED_AT_KEY);
+  safeStorageRemoveItem(SESSION_ACCOUNTS_KEY);
+  safeStorageRemoveItem(ACTIVE_SESSION_DID_KEY);
+  LEGACY_SESSION_KEYS.forEach(safeStorageRemoveItem);
+}
+
+function listSessions() {
+  migrateLegacySingleSessionIfNeeded();
+  const store = readSessionAccountsStore();
+  return store.accounts.map(acc => ({
+    did: acc.did,
+    handle: String(acc.handle || acc.session?.handle || ''),
+    savedAt: Number(acc.savedAt || 0),
+    isActive: acc.did === store.activeDid,
+  }));
+}
+
+function switchSession(did) {
+  const targetDid = String(did || '').trim();
+  if (!targetDid) return null;
+  const store = readSessionAccountsStore();
+  const hit = store.accounts.find(acc => acc.did === targetDid);
+  if (!hit) return null;
+  store.activeDid = hit.did;
+  writeSessionAccountsStore(store);
+  mirrorLegacySession(hit);
+  return hit.session;
+}
+
+function removeSession(did = '') {
+  const store = readSessionAccountsStore();
+  const targetDid = String(did || store.activeDid || '').trim();
+  if (!targetDid) {
+    mirrorLegacySession(getActiveAccountFromStore(store));
+    return false;
+  }
+  const nextAccounts = store.accounts.filter(acc => acc.did !== targetDid);
+  if (nextAccounts.length === store.accounts.length) return false;
+
+  const nextActiveDid = (store.activeDid === targetDid)
+    ? (nextAccounts[0]?.did || '')
+    : (nextAccounts.some(acc => acc.did === store.activeDid) ? store.activeDid : (nextAccounts[0]?.did || ''));
+
+  writeSessionAccountsStore({ activeDid: nextActiveDid, accounts: nextAccounts });
+  const active = nextAccounts.find(acc => acc.did === nextActiveDid) || null;
+  mirrorLegacySession(active);
+  return true;
+}
+
 // =============================================
 //  セッション
 // =============================================
-function saveSession(s)  {
-  safeStorageSetItem(SESSION_KEY, JSON.stringify(s));
-  safeStorageSetItem(SESSION_SAVED_AT_KEY, String(Date.now()));
+function saveSession(s, options = {})  {
+  upsertSessionAccount(s, options);
 }
+
 function loadSession() {
+  migrateLegacySingleSessionIfNeeded();
+
   const ver = getStorageVersion();
   const hasV1Session = !!safeStorageGetItem(SESSION_KEY);
+  const hasAccountSessions = !!safeStorageGetItem(SESSION_ACCOUNTS_KEY);
   const hasOldSession = hasLegacySession();
 
   // Storage version mismatch: invalidate current/legacy sessions and force fresh login.
-  if ((hasV1Session || hasOldSession) && ver !== CURRENT_STORAGE_VERSION) {
-    clearSession();
+  if ((hasV1Session || hasOldSession || hasAccountSessions) && ver !== CURRENT_STORAGE_VERSION) {
+    clearAllSessions();
     setStorageVersion(CURRENT_STORAGE_VERSION);
     setReloginReason('storage_version_mismatch');
     return null;
@@ -152,24 +334,47 @@ function loadSession() {
 
   if (!ver) setStorageVersion(CURRENT_STORAGE_VERSION);
 
-  try {
-    const v1 = JSON.parse(safeStorageGetItem(SESSION_KEY) || 'null');
-    if (v1) {
-      const savedAt = Number(safeStorageGetItem(SESSION_SAVED_AT_KEY) || 0);
-      if (savedAt > 0 && (Date.now() - savedAt) > SESSION_TTL_MS) {
-        clearSession();
+  // 有効期限切れアカウントを先頭から取り除き、利用可能なアカウントを返す。
+  let guard = 0;
+  while (guard < 8) {
+    guard += 1;
+    const store = readSessionAccountsStore();
+    if (!store.accounts.length) {
+      mirrorLegacySession(null);
+      return null;
+    }
+
+    const active = getActiveAccountFromStore(store);
+    if (!active?.session) {
+      removeSession(active?.did || '');
+      continue;
+    }
+
+    const savedAt = Number(active.savedAt || 0);
+    if (savedAt > 0 && (Date.now() - savedAt) > SESSION_TTL_MS) {
+      const did = active.did;
+      removeSession(did);
+      const remain = listSessions();
+      if (!remain.length) {
         setReloginReason('session_expired_policy');
         return null;
       }
-      return v1;
+      continue;
     }
-  } catch {}
+
+    if (store.activeDid !== active.did) {
+      writeSessionAccountsStore({ ...store, activeDid: active.did });
+    }
+    mirrorLegacySession(active);
+    return active.session;
+  }
+
+  mirrorLegacySession(null);
   return null;
 }
+
 function clearSession()  {
-  safeStorageRemoveItem(SESSION_KEY);
-  safeStorageRemoveItem(SESSION_SAVED_AT_KEY);
-  LEGACY_SESSION_KEYS.forEach(safeStorageRemoveItem);
+  removeSession('');
 }
 
 function getAuth() {

@@ -2069,6 +2069,123 @@ function toggleThemeMode() {
   applyTheme(mode === 'dark' ? 'light' : 'dark');
 }
 
+function getStoredSessionAccounts() {
+  if (typeof listSessions !== 'function') return [];
+  try {
+    const rows = listSessions();
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+function syncAccountSwitcherUi() {
+  const sel = document.getElementById('settings-account-switch-select');
+  if (!sel) return;
+
+  const sessions = getStoredSessionAccounts();
+  const activeDid = String(S.session?.did || '');
+  sel.innerHTML = '';
+
+  if (!sessions.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '保存済みアカウントなし';
+    sel.appendChild(opt);
+    sel.disabled = true;
+    return;
+  }
+
+  sessions.forEach(acc => {
+    const opt = document.createElement('option');
+    opt.value = String(acc.did || '');
+    const handle = String(acc.handle || 'unknown');
+    const suffix = acc.isActive ? '（現在）' : '';
+    opt.textContent = `@${handle} ${suffix}`.trim();
+    sel.appendChild(opt);
+  });
+
+  if (activeDid && sessions.some(acc => acc.did === activeDid)) {
+    sel.value = activeDid;
+  }
+  sel.disabled = sessions.length <= 1;
+}
+
+async function switchActiveAccountAndRefresh(did) {
+  if (typeof switchSession !== 'function') throw new Error('アカウント切り替え機能が利用できません');
+  const next = switchSession(did);
+  if (!next) throw new Error('指定したアカウントへ切り替えできませんでした');
+
+  S.session = next;
+  S.myProfile = null;
+  clearFetchCache();
+  stopNotifPoll();
+  Object.keys(S.cursors).forEach(k => delete S.cursors[k]);
+  document.querySelectorAll('.feed').forEach(f => { f.innerHTML = ''; });
+
+  await loadMyProfile();
+  restoreComposeCache();
+  const bootTab = getAdaptiveBootTab();
+  switchTab(bootTab);
+  await loadTab(bootTab);
+  startNotifPoll();
+  resetInactivityTimer();
+  syncAccountSwitcherUi();
+}
+
+async function handleSettingsAccountSwitch() {
+  const sel = document.getElementById('settings-account-switch-select');
+  const did = String(sel?.value || '').trim();
+  if (!did) {
+    showToast('切り替え先アカウントを選択してください', 'warn', 1800);
+    return;
+  }
+  if (did === String(S.session?.did || '')) {
+    showToast('既にこのアカウントを使用中です', 'info', 1400);
+    return;
+  }
+
+  try {
+    await switchActiveAccountAndRefresh(did);
+    showToast('アカウントを切り替えました', 'success', 1500);
+  } catch (e) {
+    showToast(toUserErrorMessage(e, 'アカウント切り替えに失敗しました'), 'error');
+  }
+}
+
+async function handleSettingsAddAccount() {
+  const handleEl = document.getElementById('settings-add-account-handle');
+  const passEl = document.getElementById('settings-add-account-password');
+  const btn = document.getElementById('settings-add-account-btn');
+  const rawHandle = String(handleEl?.value || '').replace(/^@/, '').trim();
+  const rawPass = String(passEl?.value || '').trim();
+
+  if (!rawHandle || !rawPass) {
+    showToast('追加するアカウントのハンドルとアプリパスワードを入力してください', 'warn', 2200);
+    return;
+  }
+
+  const sessions = getStoredSessionAccounts();
+  if (sessions.some(acc => String(acc.handle || '').toLowerCase() === rawHandle.toLowerCase())) {
+    showToast('このアカウントは既に保存されています', 'info', 1800);
+    return;
+  }
+
+  setLoading(btn, true);
+  try {
+    const sess = await apiLogin(rawHandle, rawPass);
+    saveSession(sess, { setActive: false });
+    if (handleEl) handleEl.value = '';
+    if (passEl) passEl.value = '';
+    syncAccountSwitcherUi();
+    showToast('アカウントを追加しました。必要なときに切り替えて利用できます', 'success', 1800);
+  } catch (e) {
+    showToast(toUserErrorMessage(e, 'アカウント追加に失敗しました'), 'error');
+  } finally {
+    setLoading(btn, false);
+  }
+}
+
 async function loadMyProfile() {
   try {
     const p = await withAuth(() => apiGetProfile());
@@ -2110,6 +2227,7 @@ async function loadMyProfile() {
     // 設定ページ
     const sh = document.getElementById('settings-handle');
     if (sh) sh.textContent = `@${p.handle}`;
+    syncAccountSwitcherUi();
   } catch(e) { console.error('プロフィール取得失敗:', e); }
 }
 
@@ -3614,10 +3732,17 @@ function handleSettingsLogoutClick() {
   handleLogout();
 }
 
-function handleLogout(options = {}) {
+async function handleLogout(options = {}) {
   const preserveCompose = options?.preserveCompose === true;
-  clearSession(); S.session = null; S.myProfile = null;
-  clearAdvancedMode();
+  if (typeof removeSession === 'function') removeSession(String(S.session?.did || ''));
+  else clearSession();
+  const remainingAccounts = (typeof listSessions === 'function')
+    ? listSessions().length
+    : 0;
+  const nextSess = loadSession();
+  S.session = null;
+  S.myProfile = null;
+  if (remainingAccounts <= 0) clearAdvancedMode();
   if (!preserveCompose) clearComposeCache();
   clearFetchCache();
   stopNotifPoll();
@@ -3625,7 +3750,28 @@ function handleLogout(options = {}) {
   inactivityTimer = null;
   document.querySelectorAll('.feed').forEach(f => f.innerHTML = '');
   Object.keys(S.cursors).forEach(k => delete S.cursors[k]);
-  showLogin();
+  if (!nextSess) {
+    showLogin();
+    syncAccountSwitcherUi();
+    return;
+  }
+
+  S.session = nextSess;
+  showApp();
+  syncSubTabUi();
+  syncExperienceUi();
+  try {
+    await loadMyProfile();
+    restoreComposeCache();
+    const bootTab = getAdaptiveBootTab();
+    switchTab(bootTab);
+    await loadTab(bootTab);
+    startNotifPoll();
+    resetInactivityTimer();
+    showToast('現在のアカウントをログアウトしました。別アカウントに切り替えました', 'info', 2200);
+  } catch (e) {
+    showToast(toUserErrorMessage(e, 'アカウント切り替え後の再読み込みに失敗しました'), 'error');
+  }
 }
 
 function openShortcutsModal() {
@@ -3975,6 +4121,11 @@ function bindAll() {
   document.getElementById('settings-personalize')?.addEventListener('change', handleExperienceSettingsChange);
   document.getElementById('settings-report-admin-btn')?.addEventListener('click', reportToAdmin);
   document.getElementById('settings-shortcuts-btn')?.addEventListener('click', openShortcutsModal);
+  document.getElementById('settings-account-switch-btn')?.addEventListener('click', handleSettingsAccountSwitch);
+  document.getElementById('settings-add-account-btn')?.addEventListener('click', handleSettingsAddAccount);
+  document.getElementById('settings-add-account-password')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') handleSettingsAddAccount();
+  });
   document.getElementById('settings-export-prefs-btn')?.addEventListener('click', exportSettingsToFile);
   document.getElementById('settings-import-prefs-btn')?.addEventListener('click', () => {
     document.getElementById('settings-import-prefs-file')?.click();
