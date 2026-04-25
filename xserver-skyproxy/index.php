@@ -239,11 +239,16 @@ function token_did_from_auth_header(string $authHeader): string
     return $did;
 }
 
-function forward_request(string $targetUrl, string $method, string $authHeader, string $rawBody = ''): array
+require_once __DIR__ . '/image-processing.php';
+
+function forward_request(string $targetUrl, string $method, string $authHeader, string $rawBody = '', ?string $contentType = null): array
 {
     $forwardHeaders = [];
-    if (!empty($_SERVER['CONTENT_TYPE'])) {
-        $forwardHeaders[] = 'Content-Type: ' . $_SERVER['CONTENT_TYPE'];
+    if ($contentType === null) {
+        $contentType = (string)($_SERVER['CONTENT_TYPE'] ?? '');
+    }
+    if ($contentType !== '') {
+        $forwardHeaders[] = 'Content-Type: ' . $contentType;
     }
     if ($authHeader !== '') {
         $forwardHeaders[] = 'Authorization: ' . $authHeader;
@@ -342,6 +347,7 @@ $requestBody = file_get_contents('php://input');
 if ($requestBody === false) {
     $requestBody = '';
 }
+$requestContentType = (string)($_SERVER['CONTENT_TYPE'] ?? '');
 $query = $_SERVER['QUERY_STRING'] ?? '';
 
 $publicUnauthPaths = [
@@ -358,7 +364,7 @@ if ($path === '/xrpc/com.atproto.server.createSession') {
         ]);
     }
     $targetUrl = 'https://bsky.social' . $path . ($query !== '' ? ('?' . $query) : '');
-    $result = forward_request($targetUrl, $method, $authHeader, $requestBody);
+    $result = forward_request($targetUrl, $method, $authHeader, $requestBody, $requestContentType);
     if (!$result['ok']) {
         json_out((int)$result['status'], [
             'error' => 'proxy_failed',
@@ -374,7 +380,7 @@ if ($path === '/xrpc/com.atproto.server.createSession') {
 if (in_array($path, $publicUnauthPaths, true)) {
     $targetHost = 'https://bsky.social';
     $targetUrl = rtrim($targetHost, '/') . $path . ($query !== '' ? ('?' . $query) : '');
-    $result = forward_request($targetUrl, $method, $authHeader, $requestBody);
+    $result = forward_request($targetUrl, $method, $authHeader, $requestBody, $requestContentType);
     if (!$result['ok']) {
         json_out((int)$result['status'], [
             'error' => 'proxy_failed',
@@ -414,8 +420,28 @@ if ($path === '/xrpc/com.atproto.server.refreshSession') {
     }
 }
 
+$forwardBody = $requestBody;
+$forwardContentType = $requestContentType;
+if ($path === '/xrpc/com.atproto.repo.uploadBlob') {
+    $processed = process_upload_blob_image($requestBody, $requestContentType);
+    if (is_array($processed) && !empty($processed['body']) && isset($processed['contentType'])) {
+        $forwardBody = (string)$processed['body'];
+        $forwardContentType = (string)$processed['contentType'];
+        error_log(sprintf(
+            'uploadBlob optimized: %dx%d %d bytes -> %dx%d %d bytes (quality %d)',
+            (int)($processed['sourceWidth'] ?? 0),
+            (int)($processed['sourceHeight'] ?? 0),
+            (int)($processed['sourceBytes'] ?? 0),
+            (int)($processed['outputWidth'] ?? 0),
+            (int)($processed['outputHeight'] ?? 0),
+            (int)($processed['outputBytes'] ?? 0),
+            (int)($processed['quality'] ?? 0)
+        ));
+    }
+}
+
 $targetUrl = rtrim($targetHost, '/') . $path . ($query !== '' ? ('?' . $query) : '');
-$result = forward_request($targetUrl, $method, $authHeader, $requestBody);
+$result = forward_request($targetUrl, $method, $authHeader, $forwardBody, $forwardContentType);
 if (!$result['ok']) {
     json_out((int)$result['status'], [
         'error' => 'proxy_failed',

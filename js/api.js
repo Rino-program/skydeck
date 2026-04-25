@@ -709,7 +709,8 @@ async function apiGetOrCreateConvoWithMember(memberDid) {
 // =============================================
 async function apiUploadBlob(file) {
   if (!file || typeof file.size !== 'number') throw new Error('画像ファイルが不正です');
-  if (file.size > MAX_IMAGE_BYTES) {
+  const isProxyMode = getConnectionMode() === CONNECTION_MODE_PROXY;
+  if (!isProxyMode && file.size > MAX_IMAGE_BYTES) {
     throw new Error(`画像サイズが大きすぎます（最大 2,000,000 bytes / 現在 ${file.size.toLocaleString()} bytes）`);
   }
   const buf = await file.arrayBuffer();

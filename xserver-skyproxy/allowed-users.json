@@ -1,6 +1,7 @@
 {
   "allowedHandles": [
-    "rino-program.bsky.social"
+    "rino-program.bsky.social",
+    "rinopro-sub.bsky.social"
   ],
   "allowedDids": [],
   "notes": "Add handles without @. Optional DIDs can also be listed here."

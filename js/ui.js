@@ -255,7 +255,7 @@ function renderPostCard(item, myDid, opts = {}) {
   <div class="post-card-inner">
     <div class="post-left">
       <img class="post-avatar" src="${avatar}" alt="${name}" onerror="this.src=''" data-handle="${handle}" data-did="${escapeHtml(author.did)}"/>
-      ${isThread ? '<div class="thread-connector"></div>' : ''}
+      <div class="thread-connector ${isThread ? '' : 'card-thread-connector'}"></div>
     </div>
     <div class="post-main">
       ${replyHandle ? `<div class="reply-indicator"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>@${escapeHtml(replyHandle)} への返信</div>` : ''}
@@ -316,7 +316,7 @@ function renderPostCard(item, myDid, opts = {}) {
 // =============================================
 function renderThreadNode(thread, myDid, depth = 0) {
   if (!thread?.post) return '';
-  const maxDepth = 5;
+  const maxDepth = 15;
   const replyChunkSize = 3;
   let html = renderPostCard({ post: thread.post, reply: thread.parent ? { parent: thread.parent?.post } : undefined }, myDid, { depth, isThread: true });
 

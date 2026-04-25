@@ -28,7 +28,7 @@ const C = window.SKYWEBPRO_CONST || {};
 const QUICK_NOTE_KEY = C.QUICK_NOTE_KEY || 'skywebpro_quick_note_v1';
 const QUICK_NOTE_LIST_KEY = C.QUICK_NOTE_LIST_KEY || 'skywebpro_quick_note_list_v1';
 const THEME_KEY = C.THEME_KEY || 'skywebpro_theme_v1';
-const APP_MAX_IMAGE_BYTES = Number(C.APP_MAX_IMAGE_BYTES || 1000000);
+const APP_MAX_IMAGE_BYTES = Number(C.APP_MAX_IMAGE_BYTES || 2000000);
 const RIGHT_PANEL_PREFS_KEY = C.RIGHT_PANEL_PREFS_KEY || 'skywebpro_right_panel_prefs_v1';
 const POST_HISTORY_KEY = C.POST_HISTORY_KEY || 'skywebpro_post_history_v1';
 const SEARCH_HISTORY_KEY = C.SEARCH_HISTORY_KEY || 'skywebpro_search_history_v1';
@@ -2683,15 +2683,17 @@ function closeUserProfile() {
 //  スレッド（返信の折り畳み表示）
 // =============================================
 async function toggleReplies(uri, containerEl, btn) {
+  const card = btn?.closest('.post-card');
   if (!containerEl.classList.contains('hidden')) {
     containerEl.classList.add('hidden');
+    card?.classList.remove('thread-open');
     btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`;
     return;
   }
 
   btn.innerHTML = renderSpinner().replace('28','15');
   try {
-    const data = await withAuth(() => apiGetPostThread(uri, 6));
+    const data = await withAuth(() => apiGetPostThread(uri, 15));
     const thread = data.thread;
     const myDid = S.session?.did;
     const topLevelChunkSize = 3;
@@ -2716,9 +2718,11 @@ async function toggleReplies(uri, containerEl, btn) {
       }
     }
     containerEl.classList.remove('hidden');
+    card?.classList.add('thread-open');
     btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>`;
   } catch(e) {
     showErrorToast(e, '返信の読み込みに失敗しました。');
+    card?.classList.remove('thread-open');
     btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`;
   }
 }
@@ -3029,8 +3033,9 @@ function handleImageSelect(e) {
   const files = Array.from(e.target.files);
   const rem = 4 - S.pendingImgs.length;
   const validImages = files.filter(f => f.type.startsWith('image/'));
-  const sizeOk = validImages.filter(f => f.size <= APP_MAX_IMAGE_BYTES);
-  const rejected = validImages.length - sizeOk.length;
+  const isProxyMode = getSafeConnectionConfig().mode === 'proxy';
+  const sizeOk = isProxyMode ? validImages : validImages.filter(f => f.size <= APP_MAX_IMAGE_BYTES);
+  const rejected = isProxyMode ? 0 : validImages.length - sizeOk.length;
   S.pendingImgs.push(...sizeOk.slice(0, rem));
   if (rejected > 0) showToast(`2MBを超える画像を ${rejected} 枚除外しました`, 'info');
   if (sizeOk.length > rem) showToast(`画像は最大4枚です。${Math.max(0,rem)}枚追加しました。`, 'info');
@@ -3050,8 +3055,9 @@ function handleComposeImagePaste(e) {
 
   e.preventDefault();
   const rem = 4 - S.pendingImgs.length;
-  const sizeOk = images.filter(f => f.size <= APP_MAX_IMAGE_BYTES);
-  const rejected = images.length - sizeOk.length;
+  const isProxyMode = getSafeConnectionConfig().mode === 'proxy';
+  const sizeOk = isProxyMode ? images : images.filter(f => f.size <= APP_MAX_IMAGE_BYTES);
+  const rejected = isProxyMode ? 0 : images.length - sizeOk.length;
   S.pendingImgs.push(...sizeOk.slice(0, rem));
 
   if (rejected > 0) showToast(`2MBを超える画像を ${rejected} 枚除外しました`, 'info');
@@ -3064,8 +3070,9 @@ function handleQuickImageSelect(e) {
   const files = Array.from(e.target.files);
   const rem = 4 - S.quickPendingImgs.length;
   const validImages = files.filter(f => f.type.startsWith('image/'));
-  const sizeOk = validImages.filter(f => f.size <= APP_MAX_IMAGE_BYTES);
-  const rejected = validImages.length - sizeOk.length;
+  const isProxyMode = getSafeConnectionConfig().mode === 'proxy';
+  const sizeOk = isProxyMode ? validImages : validImages.filter(f => f.size <= APP_MAX_IMAGE_BYTES);
+  const rejected = isProxyMode ? 0 : validImages.length - sizeOk.length;
   S.quickPendingImgs.push(...sizeOk.slice(0, rem));
   if (rejected > 0) showToast(`2MBを超える画像を ${rejected} 枚除外しました`, 'info');
   if (sizeOk.length > rem) showToast(`画像は最大4枚です。${Math.max(0,rem)}枚追加しました。`, 'info');
